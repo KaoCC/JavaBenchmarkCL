@@ -31,6 +31,7 @@ import static org.lwjgl.system.MemoryUtil.*;
 import static org.lwjgl.system.Pointer.POINTER_SIZE;
 
 // helper
+import static org.lwjgl.system.windows.WinBase.TRUE;
 import static test.InfoUtil.*;
 
 public class OpenCLTest {
@@ -113,6 +114,8 @@ public class OpenCLTest {
                     System.err.println("\tInfo: " + memUTF8(errinfo));
                 }), NULL, errcode_ret);
                 checkCLError(errcode_ret);
+
+                // buffer
 
                 long buffer = clCreateBuffer(clContext, CL_MEM_READ_ONLY, 128, errcode_ret);
                 checkCLError(errcode_ret);
@@ -228,6 +231,7 @@ public class OpenCLTest {
 
                 // Try To build program and kernel
 
+                // ----------------- start
 
                 ByteBuffer source;
                 PointerBuffer arrayOfKernelSources;
@@ -270,8 +274,9 @@ public class OpenCLTest {
                     ));
 
                     String log = getProgramBuildInfoStringASCII(program, device, CL_PROGRAM_BUILD_LOG);
-                    if ( !log.isEmpty() )
+                    if ( !log.isEmpty() ) {
                         System.out.println(String.format("BUILD LOG:\n----\n%s\n-----", log));
+                    }
 
                     latch.countDown();
                 }), NULL);
@@ -299,10 +304,97 @@ public class OpenCLTest {
                 // memory buffers
 
 
+                final int bufferSize = 1024;
+
+                IntBuffer hostBufferA = stack.mallocInt(bufferSize);
+
+                for (int j = 0; j < hostBufferA.capacity(); ++j) {
+                    hostBufferA.put(j, j);
+                }
+
+                // use host_ptr
+                long bufferA = clCreateBuffer(clContext, CL_MEM_READ_WRITE  | CL_MEM_USE_HOST_PTR, hostBufferA, errcode_ret);
+                checkCLError(errcode_ret);
+
+
+                IntBuffer hostBufferB = stack.mallocInt(bufferSize);
+
+                for (int j = 0; j < hostBufferB.capacity(); ++j) {
+                    hostBufferB.put(j, 10);
+                }
+
+                // copy host_ptr
+                long bufferB = clCreateBuffer(clContext, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, hostBufferB, errcode_ret);
+                checkCLError(errcode_ret);
+
+                IntBuffer hostBufferC = stack.mallocInt(bufferSize);
+
+                long bufferC = clCreateBuffer(clContext, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR , hostBufferC, errcode_ret);
+                checkCLError(errcode_ret);
 
 
 
-                // rest of the world
+                // CLMemObjectDestructorCallback ?
+
+                // set kernel args
+                checkCLError(clSetKernelArg1p(clKernel, 0, bufferA));
+                checkCLError(clSetKernelArg1p(clKernel, 1, bufferB));
+                checkCLError(clSetKernelArg1p(clKernel, 2, bufferC));
+
+
+                // create CQ
+                long queueCL = clCreateCommandQueue(clContext, device, NULL, errcode_ret);
+                checkCLError(errcode_ret);
+
+
+
+
+                PointerBuffer kernel2DGlobalWorkSize = BufferUtils.createPointerBuffer(1);
+                kernel2DGlobalWorkSize.put(0, bufferSize);
+                errcode = clEnqueueNDRangeKernel(queueCL, clKernel, 1, null,
+                        kernel2DGlobalWorkSize, null, null, null);
+                checkCLError(errcode);
+
+
+                // read buffer
+
+                // no need to write or read ??
+                errcode = clEnqueueReadBuffer(queueCL, bufferC, TRUE, 0, hostBufferC, null, null);
+                checkCLError(errcode);
+
+
+                // clean up
+
+                errcode = clReleaseProgram(clProgram);
+                checkCLError(errcode);
+
+                errcode = clReleaseCommandQueue(queueCL);
+                checkCLError(errcode);
+
+
+                errcode = clReleaseKernel(clKernel);
+                checkCLError(errcode);
+
+
+
+                // verify the result
+
+                System.out.println("Verify the result");
+                for (int j = 0; j < hostBufferA.capacity(); ++j) {
+                    int valueA = hostBufferA.get(j);
+                    int valueC = hostBufferC.get(j);
+
+                    //System.out.printf("%d, ", valueC);
+
+                    if (valueA != valueC)
+                        throw new RuntimeException(String.format("verification fail at %d", j));
+                }
+
+
+                System.out.println("PASSED !");
+
+
+                //  ------------------ rest of the world
 
                 System.out.println();
 
