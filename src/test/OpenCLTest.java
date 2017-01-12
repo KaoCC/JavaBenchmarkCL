@@ -6,13 +6,11 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.opencl.*;
 import org.lwjgl.system.MemoryStack;
-import sun.nio.ch.IOUtil;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
-import java.nio.LongBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.SeekableByteChannel;
@@ -304,9 +302,18 @@ public class OpenCLTest {
                 // memory buffers
 
 
-                final int bufferSize = 1024;
 
-                IntBuffer hostBufferA = stack.mallocInt(bufferSize);
+                // there are three ways to allocate memory in LWJGL:
+                // 1. stack-based approach: org.lwjgl.system.MemoryStack
+                // 2. Malloc: org.lwjgl.system.MemoryUtil
+                // 3. ByteBuffer: org.lwjgl.BufferUtil
+                // Efficiency ordered from top to bottom.
+
+                final int bufferSize = 1024 * 1024 * 10;
+
+                // the buffer is too large to be allocated on the stack
+                //IntBuffer hostBufferA = stack.mallocInt(bufferSize);
+                IntBuffer  hostBufferA = memAllocInt(bufferSize);
 
                 for (int j = 0; j < hostBufferA.capacity(); ++j) {
                     hostBufferA.put(j, j);
@@ -317,7 +324,9 @@ public class OpenCLTest {
                 checkCLError(errcode_ret);
 
 
-                IntBuffer hostBufferB = stack.mallocInt(bufferSize);
+                //
+                //IntBuffer hostBufferB = stack.mallocInt(bufferSize);
+                IntBuffer  hostBufferB = memAllocInt(bufferSize);
 
                 for (int j = 0; j < hostBufferB.capacity(); ++j) {
                     hostBufferB.put(j, 10);
@@ -327,7 +336,9 @@ public class OpenCLTest {
                 long bufferB = clCreateBuffer(clContext, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, hostBufferB, errcode_ret);
                 checkCLError(errcode_ret);
 
-                IntBuffer hostBufferC = stack.mallocInt(bufferSize);
+                //
+                //IntBuffer hostBufferC = stack.mallocInt(bufferSize);
+                IntBuffer  hostBufferC = memAllocInt(bufferSize);
 
                 long bufferC = clCreateBuffer(clContext, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR , hostBufferC, errcode_ret);
                 checkCLError(errcode_ret);
@@ -351,9 +362,16 @@ public class OpenCLTest {
 
                 PointerBuffer kernel2DGlobalWorkSize = BufferUtils.createPointerBuffer(1);
                 kernel2DGlobalWorkSize.put(0, bufferSize);
+
+                long execTime = System.nanoTime();
+
                 errcode = clEnqueueNDRangeKernel(queueCL, clKernel, 1, null,
                         kernel2DGlobalWorkSize, null, null, null);
                 checkCLError(errcode);
+
+                execTime = System.nanoTime() - execTime;
+
+                System.out.printf("KERNEL EXEC TIME: %.4fus\n", (double)execTime);
 
 
                 // read buffer
@@ -361,6 +379,49 @@ public class OpenCLTest {
                 // no need to write or read ??
                 errcode = clEnqueueReadBuffer(queueCL, bufferC, TRUE, 0, hostBufferC, null, null);
                 checkCLError(errcode);
+
+
+                // memory map
+
+
+                // beware of the buffer size
+                ByteBuffer hostMappedByteBufferA = clEnqueueMapBuffer(queueCL, bufferA, TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, bufferSize * Integer.BYTES, null, null, errcode_ret, null );
+                IntBuffer hostMappedBufferA = hostMappedByteBufferA.asIntBuffer();
+                checkCLError(errcode_ret);
+
+
+
+
+
+
+                // verify the result
+
+                System.out.println("Verify the result");
+                for (int j = 0; j < hostMappedBufferA.capacity(); ++j) {
+                    int valueA = hostMappedBufferA.get(j);
+                    int valueC = hostBufferC.get(j);
+
+                    //System.out.printf("[%d]:%d:%d, ", j, valueA, valueC);
+
+                    if (valueA != valueC)
+                        throw new RuntimeException(String.format("verification fail at %d", j));
+                }
+
+                // unmap
+
+
+                errcode = clEnqueueUnmapMemObject(queueCL, bufferA, hostMappedByteBufferA, null, null);
+                checkCLError(errcode);
+
+
+
+                // free
+                memFree(hostBufferA);
+                memFree(hostBufferB);
+                memFree(hostBufferC);
+
+                System.out.println("PASSED !");
+
 
 
                 // clean up
@@ -374,24 +435,6 @@ public class OpenCLTest {
 
                 errcode = clReleaseKernel(clKernel);
                 checkCLError(errcode);
-
-
-
-                // verify the result
-
-                System.out.println("Verify the result");
-                for (int j = 0; j < hostBufferA.capacity(); ++j) {
-                    int valueA = hostBufferA.get(j);
-                    int valueC = hostBufferC.get(j);
-
-                    //System.out.printf("%d, ", valueC);
-
-                    if (valueA != valueC)
-                        throw new RuntimeException(String.format("verification fail at %d", j));
-                }
-
-
-                System.out.println("PASSED !");
 
 
                 //  ------------------ rest of the world
